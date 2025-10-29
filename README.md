@@ -1,5 +1,6 @@
 # Introduction
 [![Author](https://img.shields.io/badge/Pattawee.P-blue?label=Author)](https://bodysbobb.github.io/) ![Last Updated](https://img.shields.io/github/last-commit/Bodysbobb/GTAPViz?label=Last%20Updated&color=blue)
+![License](https://img.shields.io/github/license/Bodysbobb/trade-analysis?color=3CB371)
 
 # Trade Analysis Automation
 A **Python-based automation tool** for downloading, merging, and summarizing international trade and macroeconomic data using official APIs from **UN Comtrade**, **World Bank**, and **CEPII**.
