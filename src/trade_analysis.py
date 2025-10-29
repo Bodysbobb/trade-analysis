@@ -39,8 +39,8 @@ CONFIG = {
     "YEARS": [2015],
     "REPORTERS": ["THA", "USA"],
     "PARTNERS": ["THA", "USA"],
-    "OUTPUT_DIR": r"C:\Users\b_pat\Desktop\CODE\TEST",
-    "MAPPING_PATH": r"C:\Users\b_pat\Desktop\CODE\API_Mapping.xlsx",
+    "OUTPUT_DIR": r"YOUR\OUTPUT\PATH",
+    "MAPPING_PATH": r"YOUR\MAPPING\PATH\API_Mapping.xlsx",
     "MERGE_DATA": True,
 
     # === WORLD BANK SETTINGS ===
@@ -60,7 +60,7 @@ CONFIG = {
 
     # === UN COMTRADE SETTINGS ===
     "UN_PARAMS": {
-        "subscription_key": "6f47fe4d61744f1793e98fa2f590cef8",
+        "subscription_key": "YOUR_SUBSCRIPTION_KEY_FROM_COMMTRADE",
         "typeCode": "C",
         "freqCode": "A",
         "clCode": "HS",
