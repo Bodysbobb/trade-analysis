@@ -1,46 +1,49 @@
 """
 Author: Pattawee Puangchit
-Purpose: Automates downloading, merging, and summarizing trade data from UN Comtrade 
-and macroeconomic indicators from the World Bank API into unified CSV and Excel outputs.
+Purpose: Automates the downloading, merging, and summarizing of trade data from UN Comtrade 
+and macroeconomic indicators from the World Bank API, as well as pre-downloaded CEPII data (if needed), 
+into unified CSV and Excel outputs.
+
+For more information, please refer to https://www.pattawee-pp.com/blog/2025/trade-research-api/
 """
 
 # pip install pandas wbgapi tqdm comtradeapicall openpyxl
 import os
-import time
-import random
 import pandas as pd
 import wbgapi as wb
 import concurrent.futures
 import comtradeapicall
 from tqdm import tqdm
-import json 
+import numpy as np
 import openpyxl 
-
 
 # ==========================================================
 # CONFIGURATION
 # ==========================================================
+
 """
 # Variables Explanation:
 # - YEARS: List or range of years to download, e.g., range(2015,2021) or single year [2015].
 # - REPORTERS: List of ISO3 reporter countries, e.g., ["THA","MYS"] or ["all"].
 # - PARTNERS: List of ISO3 partner countries or ["all"].
 # - OUTPUT_DIR: Output directory for saving results.
-# - MAPPING_PATH: Optional Excel file for ISO ↔ numeric code mapping.
 # - MERGE_DATA: Merge UN Comtrade & World Bank data automatically (True/False).
+# - MAPPING_PATH: Optional Excel file for ISO ↔ numeric code mapping.
 # - WB_VARIABLES: List of World Bank indicator codes to extract.
 # - WB_MAPPING_SHEET: Sheet name in mapping file with readable WB variable names.
 # - USE_WB_VARIABLE_NAME: False = rename WB codes to readable names using mapping file.
 # - UN_PARAMS: Parameters passed directly to the UN Comtrade API.
+# - CEPII_PATH: Path to the CEPII Gravity V202211 or similar CSV file.
+# - CEPII_VARIABLES: List of CEPII variables to include, or ["all"].
 """
-
 CONFIG = {
     # === COMMON SETTINGS ===
     "YEARS": [2015],
     "REPORTERS": ["THA", "USA"],
     "PARTNERS": ["THA", "USA"],
-    "OUTPUT_DIR": r"YOUR\OUTPUT\PATH",
-    "MAPPING_PATH": r"YOUR\MAPPING\PATH\API_Mapping.xlsx",
+    "OUTPUT_DIR": r"YOUR\PATH\TO\OUTPUT",
+    "MAPPING_PATH": r"YOUR\PATH\TO\MAPPING\API_Mapping.xlsx",
+    "CEPII_PATH": r"YOUR\PATH\TO\CEPII\CEPII_Symmetric.csv",
     "MERGE_DATA": True,
 
     # === WORLD BANK SETTINGS ===
@@ -60,7 +63,7 @@ CONFIG = {
 
     # === UN COMTRADE SETTINGS ===
     "UN_PARAMS": {
-        "subscription_key": "YOUR_SUBSCRIPTION_KEY_FROM_COMMTRADE",
+        "subscription_key": "YOUR_SUBSCRIPTION_KEY",
         "typeCode": "C",
         "freqCode": "A",
         "clCode": "HS",
@@ -75,19 +78,18 @@ CONFIG = {
         "breakdownMode": "plus",
         "countOnly": None,
         "includeDesc": True
-    }
+    },
+    
+    # === CEPII SETTINGS ===
+    "CEPII_VARIABLES": ["distw_harmonic", "contig", "comlang_off"] # or ["all"]
 }
 
 os.makedirs(CONFIG["OUTPUT_DIR"], exist_ok=True)
 
 
-# ===================================================================
-# DO NOT CHANGE BELOW THIS LINE UNLESS YOU ARE SURE ABOUT IT
-# ===================================================================
-
-# ==========================================================
-# HARDCODED ISO -> numeric UN Comtrade code mapping
-# ==========================================================
+# ====================================================================
+# DO NOT CHANGE BELOW THIS LINE UNLESS YOU ARE SURE WHAT YOU ARE DOING
+# ====================================================================
 HARDCODED_COMTRADE_MAP = {
     "USA": "842", "THA": "764", "CHN": "156", "DEU": "276", "JPN": "392", 
     "AFG": "004", "ALB": "008", "DZA": "012", "ASM": "016", "AND": "020", 
@@ -200,6 +202,103 @@ def get_wb_column_map():
     # If using default variable names or file not available, return list of codes
     data = {"WB_Code": CONFIG["WB_VARIABLES"], "WB_Description": ["(Default Code Used)" for _ in CONFIG["WB_VARIABLES"]]}
     return pd.DataFrame(data)
+
+# ==========================================================
+# 0. CEPII DATA PREPARATION
+# ==========================================================
+def prepare_cepii_data():
+    """Loads CEPII data, processes it into a symmetric (order-invariant) format, 
+    and selects variables based on CONFIG["CEPII_VARIABLES"].
+    """
+    input_path = CONFIG.get("CEPII_PATH")
+    
+    # === CRUCIAL SKIP CHECK ===
+    if not input_path or not os.path.exists(input_path):
+        print("⚠ CEPII input file not found or path missing. Skipping CEPII merge.")
+        return pd.DataFrame()
+
+    print("Processing CEPII data...")
+    try:
+        df = pd.read_csv(input_path, dtype=str)
+    except Exception as e:
+        print(f"Error reading CEPII file: {e}. Skipping CEPII merge.")
+        return pd.DataFrame()
+    
+    # Define all relevant CEPII columns
+    all_cepii_cols = [
+        "iso3_o", "iso3_d",
+        "distw_harmonic", "distw_arithmetic", "distw_harmonic_jh", "distw_arithmetic_jh", "dist",
+        "main_city_source_o", "main_city_source_d", "distcap",
+        "contig", "diplo_disagreement", "scaled_sci_2021",
+        "comlang_off", "comlang_ethno",
+        "comcol", "col45",
+        "legal_old_o", "legal_old_d", "legal_new_o", "legal_new_d",
+        "comleg_pretrans", "comleg_posttrans", "transition_legalchange",
+        "comrelig",
+        "heg_o", "heg_d",
+        "col_dep_ever", "col_dep", "col_dep_end_year", "col_dep_end_conflict",
+        "empire",
+        "sibling_ever", "sibling", "sever_year", "sib_conflict",
+    ]
+    
+    # Determine columns to keep based on config
+    cepii_vars_to_keep = CONFIG["CEPII_VARIABLES"]
+    if cepii_vars_to_keep == ["all"]:
+        # Keep all non-ISO and non-directional columns that exist in the file
+        cols_to_keep = [c for c in all_cepii_cols if c not in ["iso3_o", "iso3_d"] and c in df.columns]
+    else:
+        # Keep only the requested columns that exist in the file
+        cols_to_keep = [c for c in cepii_vars_to_keep if c in df.columns]
+    
+    cols_to_keep_with_iso = ["iso3_o", "iso3_d"] + cols_to_keep
+    
+    # 1. Load and Trim
+    existing_cols = [c for c in cols_to_keep_with_iso if c in df.columns]
+    if not ("iso3_o" in existing_cols and "iso3_d" in existing_cols):
+        print("CEPII file missing required 'iso3_o' or 'iso3_d' columns. Skipping CEPII merge.")
+        return pd.DataFrame()
+        
+    df = df[existing_cols].copy()
+    
+    # Identify numeric columns among the kept variables
+    num_cols_all = [c for c in all_cepii_cols if c not in ["iso3_o", "iso3_d"]]
+    num_cols = [c for c in existing_cols if c in num_cols_all]
+    
+    for c in num_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    
+    # 2. Create Order-Invariant Keys
+    df["key_a"] = np.where(df["iso3_o"] < df["iso3_d"], df["iso3_o"], df["iso3_d"])
+    df["key_b"] = np.where(df["iso3_o"] < df["iso3_d"], df["iso3_d"], df["iso3_o"])
+    
+    # 3. Aggregate by (key_a, key_b) using first_nonnull
+    def first_nonnull(series):
+        # return the first value that is not NaN
+        for v in series:
+            if pd.notna(v):
+                return v
+        return np.nan
+
+    agg_dict = {}
+    for c in cols_to_keep:
+        if c in df.columns:
+            agg_dict[c] = first_nonnull
+
+    if not agg_dict:
+        print("No CEPII variables selected or found. Returning empty DataFrame.")
+        return pd.DataFrame()
+        
+    collapsed = df.groupby(["key_a", "key_b"], as_index=False).agg(agg_dict)
+    
+    # Create the symmetric key
+    collapsed["cepii_key"] = collapsed["key_a"] + "-" + collapsed["key_b"]
+    
+    # Keep only the key and the CEPII variables
+    final_cols = ["cepii_key"] + cols_to_keep
+    final_df = collapsed[final_cols].copy()
+    
+    print(f"Processed CEPII data for {len(final_df)} unique country pairs.")
+    return final_df
 
 # ==========================================================
 # 1. WORLD BANK
@@ -350,9 +449,9 @@ def fetch_un_comtrade_data():
     return merged
 
 # ==========================================================
-# 3. MERGE BOTH
+# 3. MERGE ALL DATASETS
 # ==========================================================
-def merge_datasets(df_wb, df_trade):
+def merge_datasets(df_wb, df_trade, df_cepii):
     print("Merging datasets...")
     if df_trade.empty:
         print("Trade data is empty, skipping merge.")
@@ -362,14 +461,36 @@ def merge_datasets(df_wb, df_trade):
         df_trade = df_trade.rename(columns={"period": "year"})
     df_trade["year"] = pd.to_numeric(df_trade["year"], errors="coerce").astype("Int64")
     
+    # 3.1 Merge World Bank Data
     wb_rep = df_wb.add_suffix("_reporter").rename(columns={"countryISO_reporter": "reporterISO", "Year_reporter": "year"})
     wb_par = df_wb.add_suffix("_partner").rename(columns={"countryISO_partner": "partnerISO", "Year_partner": "year"})
     
     merged = df_trade.merge(wb_rep, on=["reporterISO", "year"], how="left")
     merged = merged.merge(wb_par, on=["partnerISO", "year"], how="left")
     
-    merged.to_csv(os.path.join(CONFIG["OUTPUT_DIR"], "Merged_Trade_WB.csv"), index=False)
-    print("Merged completed.")
+    # 3.2 Merge CEPII Data (Bilateral Symmetric Merge)
+    if not df_cepii.empty and "reporterISO" in merged.columns and "partnerISO" in merged.columns:
+        print("Merging CEPII data symmetrically...")
+        
+        # Create the symmetric key for the trade data: min(R, P) - max(R, P)
+        merged["cepii_merge_key"] = np.where(
+            merged["reporterISO"] < merged["partnerISO"],
+            merged["reporterISO"] + "-" + merged["partnerISO"],
+            merged["partnerISO"] + "-" + merged["reporterISO"]
+        )
+        
+        # Merge the CEPII data using the symmetric key
+        # The key column in df_cepii is 'cepii_key'
+        merged = merged.merge(df_cepii, left_on="cepii_merge_key", right_on="cepii_key", how="left")
+        
+        # Drop temporary keys
+        merged = merged.drop(columns=["cepii_merge_key", "cepii_key"], errors='ignore')
+        print("CEPII merge completed.")
+    else:
+        print("Skipping CEPII merge (CEPII data is empty or trade data columns missing).")
+
+    merged.to_csv(os.path.join(CONFIG["OUTPUT_DIR"], "Merged_Trade_WB_CEPII.csv"), index=False)
+    print("Merged data file saved.")
     return merged
 
 # ==========================================================
@@ -395,10 +516,14 @@ def export_summary(df):
             pd.crosstab(df['reporterISO'], df['year']).to_excel(
                 w, sheet_name='CountryYearMatrix'
             )
+        
+        # Missing Data Sheet (Updated to include CEPII)
         if 'year' in df.columns:
-            df.isna().groupby(df['year']).sum().to_excel(
+            missing_data_df = df.isna().groupby(df['year']).sum()
+            missing_data_df.to_excel(
                 w, sheet_name='MissingData'
             )
+            
         if 'cmdCode' in df.columns and 'year' in df.columns:
             df.groupby(['year','cmdCode']).size().reset_index(
                 name='ObsCount'
@@ -418,21 +543,21 @@ def export_summary(df):
                 w, sheet_name='Unique_Combos_Year', index=False
             )
         
-        # New Sheet 3: Statistics per Reporter
+        # New Sheet 3: Statistics per Reporter (Fixed FutureWarning)
         if 'reporterISO' in df.columns and numeric_cols:
-            df.groupby('reporterISO')[numeric_cols].describe().stack().unstack(level=1).to_excel(
+            df.groupby('reporterISO')[numeric_cols].describe().stack(future_stack=True).unstack(level=1).to_excel(
                 w, sheet_name='Stats_by_Reporter'
             )
             
-        # New Sheet 4: Statistics per Year
+        # New Sheet 4: Statistics per Year (Fixed FutureWarning)
         if 'year' in df.columns and numeric_cols:
-            df.groupby('year')[numeric_cols].describe().stack().unstack(level=1).to_excel(
+            df.groupby('year')[numeric_cols].describe().stack(future_stack=True).unstack(level=1).to_excel(
                 w, sheet_name='Stats_by_Year'
             )
             
-        # New Sheet 5: Statistics per Product Code
+        # New Sheet 5: Statistics per Product Code (Fixed FutureWarning)
         if 'cmdCode' in df.columns and numeric_cols:
-            df.groupby('cmdCode')[numeric_cols].describe().stack().unstack(level=1).to_excel(
+            df.groupby('cmdCode')[numeric_cols].describe().stack(future_stack=True).unstack(level=1).to_excel(
                 w, sheet_name='Stats_by_Product'
             )
 
@@ -445,11 +570,20 @@ def export_summary(df):
 def main():
     print("=== Trade Data Routine Started ===")
     
+    # 0. CEPII data processing (handles missing file and skips)
+    cepii_df = prepare_cepii_data()
+    
+    # 1. World Bank data
     wb_df = fetch_world_bank_data()
+    
+    # 2. UN Comtrade data
     trade_df = fetch_un_comtrade_data()
     
     if CONFIG["MERGE_DATA"]:
-        merged_df = merge_datasets(wb_df, trade_df)
+        # 3. Merge all data (including CEPII, which is skipped if empty)
+        merged_df = merge_datasets(wb_df, trade_df, cepii_df)
+        
+        # 4. Export summary
         export_summary(merged_df)
         
     print("=== Done ===")
