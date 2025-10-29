@@ -1,7 +1,10 @@
+# Introduction
+[![Author](https://img.shields.io/badge/Pattawee.P-blue?label=Author)](https://bodysbobb.github.io/) ![Last Updated](https://img.shields.io/github/last-commit/Bodysbobb/GTAPViz?label=Last%20Updated&color=blue)
+
 # Trade Analysis Automation
 A **Python-based automation tool** for downloading, merging, and summarizing international trade and macroeconomic data using official APIs from **UN Comtrade**, **World Bank**, and **CEPII**.
 
-🔗 **Full documentation and tutorial:** [pattawee-pp.com/blog/2025/trade-research-api](https://www.pattawee-pp.com/blog/2025/trade-research-api)
+🔗 **Full documentation and tutorial:** [Pattawee - Trade Research API](https://www.pattawee-pp.com/blog/2025/trade-research-api)
 
 ---
 
